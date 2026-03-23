@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "memx"
+version = "0.1.0"
+description = "A minimal, high-accuracy memory system for long-context AI conversations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["memory", "llm", "rag", "faiss", "ai", "chatbot"]
+
+dependencies = [
+    "sentence-transformers>=2.7.0",
+    "faiss-cpu>=1.8.0",
+    "openai>=1.30.0",
+    "numpy>=1.26.0",
+    "tqdm>=4.66.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "black", "ruff"]
+bench = ["pandas>=2.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["memx*"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
