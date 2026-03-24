@@ -2,38 +2,39 @@
 Semantic profile: one LLM call per session to maintain a structured user model.
 
 Cost model:
-  - Ingestion: 1 LLM call per session (not per message).
+  - Ingestion: 1 LLM call per session (not per message). Skipped if no LLM configured.
   - Query time: 0 additional calls — the profile is pre-computed.
 
 The profile is injected as ~500 tokens of structured JSON into every query prompt.
 This gives the LLM pre-digested preference/belief information that it would
 otherwise have to piece together from 20 raw memory snippets.
-
-gated-mem experiments showed that forcing the LLM to enumerate preference signals
-at query time added +40% on preference questions. The semantic profile offloads
-that enumeration to ingestion time, making it free at query time.
 """
 from __future__ import annotations
 
 import json
 import logging
+from typing import Callable
+
+from .db import MemoryDB
 
 logger = logging.getLogger(__name__)
+
+LLMFunction = Callable[[str], str]
 
 
 class SemanticProfile:
     """
     Maintains a structured JSON profile of the user, updated once per session.
+    Persisted to SQLite via MemoryDB.
 
-    The profile tracks:
-      - Preferences and opinions (explicit and implicit)
-      - Factual facts: job, location, relationships, interests
-      - Beliefs and values
-      - Changes over time (what superseded what)
+    Works without an LLM — the profile simply stays empty. All read methods
+    return safe defaults. The profile becomes useful only when an LLM is
+    provided and end_session() is called.
     """
 
-    def __init__(self) -> None:
-        self.profile: dict = {}
+    def __init__(self, db: MemoryDB) -> None:
+        self.db = db
+        self.profile: dict = db.get_profile()
 
     # ------------------------------------------------------------------
     # Update
@@ -43,7 +44,7 @@ class SemanticProfile:
         self,
         session_messages: list[dict],
         session_date: str,
-        llm_fn,  # callable(prompt: str) -> str
+        llm_fn: LLMFunction,
     ) -> None:
         """
         Update the profile from a completed session.
@@ -51,9 +52,11 @@ class SemanticProfile:
         Args:
             session_messages: List of {"role": str, "content": str} dicts.
             session_date: ISO-format date string for the session.
-            llm_fn: Any callable that takes a prompt string and returns a string.
-                    Typically wraps your OpenAI / Anthropic client.
+            llm_fn: Any callable (prompt: str) -> str.
         """
+        if not session_messages:
+            return
+
         current_json = (
             json.dumps(self.profile, indent=2) if self.profile else "No profile yet."
         )
@@ -91,11 +94,12 @@ Output the complete updated profile as a JSON object:"""
 
         try:
             self.profile = json.loads(cleaned)
+            self.db.set_profile(self.profile)
         except json.JSONDecodeError:
             logger.warning(
-                "SemanticProfile: LLM returned non-JSON response; profile not updated.\n"
-                "Raw response: %s",
-                response[:200],
+                "SemanticProfile: LLM returned non-JSON; profile not updated. "
+                "Response: %.200s",
+                response,
             )
 
     # ------------------------------------------------------------------
@@ -110,21 +114,3 @@ Output the complete updated profile as a JSON object:"""
 
     def is_empty(self) -> bool:
         return not bool(self.profile)
-
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
-
-    def save(self, path: str) -> None:
-        import pathlib
-
-        p = pathlib.Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(self.profile, indent=2))
-
-    def load(self, path: str) -> None:
-        import pathlib
-
-        p = pathlib.Path(path)
-        if p.exists():
-            self.profile = json.loads(p.read_text())

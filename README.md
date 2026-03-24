@@ -1,37 +1,127 @@
 # memx
 
-A minimal, high-accuracy memory system for long-context AI conversations.
+A minimal, high-accuracy memory system for AI agents.
 Four components. No gating. No graph databases. No multi-agent pipelines.
+
+## Install
+
+```bash
+pip install -e .
+```
+
+## Quick start
+
+```python
+from memx import MemorySystem
+
+mem = MemorySystem(user_id="user_123")
+
+# Add messages — session management is automatic
+mem.add("user", "I just moved to San Francisco from New York")
+mem.add("assistant", "Welcome to SF! What brought you here?")
+mem.add("user", "Got a new job at a startup in SOMA")
+mem.end_session()
+
+# Next day, new session
+mem.add("user", "The commute from the Mission is brutal")
+
+# Get structured context for your own prompt (no LLM call)
+context = mem.get_context("Where does the user live?")
+
+# Or get a full answer (requires an LLM function)
+# answer = mem.answer("Where does the user live?")
+```
+
+### With an LLM
+
+```python
+from openai import OpenAI
+from memx import MemorySystem
+
+client = OpenAI()
+
+def llm(prompt: str) -> str:
+    r = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return r.choices[0].message.content
+
+mem = MemorySystem(user_id="user_123", llm=llm)
+
+mem.add("user", "I love hiking, especially in the mountains")
+mem.end_session()  # triggers profile update
+
+# answer() uses CoT prompting over retrieved + structured memories
+print(mem.answer("What are the user's hobbies?"))
+```
+
+Works with any LLM — OpenAI, Anthropic, local models. Just pass a `(str) -> str` callable.
 
 ## How it works
 
-memx is built on a single insight from the [gated-mem](https://github.com/VihAMBR/gated-mem) experiments:
+Built on a single insight from the [gated-mem](https://github.com/VihAMBR/gated-mem) experiments:
 **the bottleneck is not what you store — it's how you retrieve and reason**.
-Weeks of sophisticated encoding gates (surprise gating, neuroplasticity, entity tracking)
-produced marginal gains or regressions. A single CoT prompt change produced +5.8% overall
-and +40% on preference questions. memx is the distillation of that finding into four clean components:
 
-1. **MemoryStore** — store every message. Embed with `all-MiniLM-L6-v2`. Index with FAISS.
-   Zero LLM calls, zero filtering decisions, zero false negatives.
+1. **MemoryStore** — store every message. Embed with `all-MiniLM-L6-v2`. Index with FAISS. Zero LLM calls, zero filtering, zero false negatives. Backed by SQLite — memories survive restarts.
 
-2. **Retriever** — two-stage pipeline: FAISS fetches 50 rough candidates; a local
-   `cross-encoder/ms-marco-MiniLM-L-6-v2` reranks them for precision (~10 ms).
-   Retrieved memories are then *structured* into topical clusters sorted chronologically
-   before being handed to the LLM — so the LLM sees organised evidence, not a flat dump.
+2. **Retriever** — FAISS fetches 50 candidates; a local cross-encoder (`ms-marco-MiniLM-L-6-v2`) reranks for precision (~10 ms). Retrieved memories are clustered by topic and sorted chronologically before reaching the LLM.
 
-3. **SemanticProfile** — one LLM call per session builds and updates a structured JSON
-   user model (preferences, facts, beliefs). The profile is injected free at query time,
-   giving the LLM pre-digested preference signals without additional API cost.
+3. **SemanticProfile** — one LLM call per session builds a structured JSON user model. Injected free at query time (~500 tokens). Optional — everything works without it.
 
-4. **reason** — five query-adaptive CoT prompt templates:
-   `temporal`, `preference`, `knowledge_update`, `counting`, `general`.
-   A zero-latency regex classifier routes each query to the right template.
+4. **reason** — five query-adaptive CoT prompt templates: `temporal`, `preference`, `knowledge_update`, `counting`, `general`. A zero-latency regex classifier routes each query.
 
-**Cost model:** 0 LLM calls per message at ingestion · 1 per session (profile) · 1 per query.
+### Cost model
 
-## Results
+| Operation | LLM calls |
+|---|---|
+| `add()` a message | 0 |
+| `end_session()` (profile update) | 1 (optional) |
+| `get_context()` | 0 |
+| `answer()` | 1 |
 
-| Category | gated-mem (CoT) | memx (target) | What drives the gain |
+## API
+
+### `MemorySystem(user_id, db_path, llm, ...)`
+
+| Param | Default | Description |
+|---|---|---|
+| `user_id` | `"default"` | Unique user identifier. One SQLite file per user. |
+| `db_path` | `"~/.memx"` | Directory for SQLite databases. |
+| `llm` | `None` | Optional `(str) -> str` callable. Required for `answer()` and profile updates. |
+| `encoder_model` | `"all-MiniLM-L6-v2"` | SentenceTransformer model for embeddings. |
+| `reranker_model` | `"cross-encoder/ms-marco-MiniLM-L-6-v2"` | CrossEncoder for reranking. |
+| `session_gap_minutes` | `30` | Minutes of inactivity before auto-starting a new session. |
+
+### Methods
+
+| Method | LLM? | Description |
+|---|---|---|
+| `add(role, content, timestamp?)` | No | Add a message. Session management is automatic. |
+| `end_session()` | Optional | End current session. Triggers profile update if LLM configured. |
+| `get_context(query, top_k=20)` | **No** | Return structured memories + profile as a string. The primary interface. |
+| `answer(question, top_k=20)` | Yes | Get a full answer using CoT prompting. Convenience wrapper. |
+| `search(query, top_k=10)` | No | Return raw memory dicts. For debugging. |
+| `ingest_session(messages, session_id, session_date)` | Optional | Bulk ingest. For benchmarks and migration. |
+
+### Context manager
+
+```python
+with MemorySystem(user_id="alice") as mem:
+    mem.add("user", "Hello")
+    context = mem.get_context("greeting")
+# Automatically flushes session and closes DB
+```
+
+## Persistence
+
+Memories are stored in SQLite (one file per user at `~/.memx/<user_id>.db`). Every `add()` call writes immediately. The FAISS index is rebuilt lazily in memory. If the process crashes, no data is lost.
+
+## Benchmarks
+
+Target numbers on LongMemEval (500 instances):
+
+| Category | gated-mem (CoT) | memx target | What drives the gain |
 |---|---|---|---|
 | IE-User | 95.7% | 95%+ | Already solved |
 | IE-Asst | 98.2% | 98%+ | Already solved |
@@ -41,100 +131,10 @@ and +40% on preference questions. memx is the distillation of that finding into 
 | Knowledge-update | 84.6% | 90%+ | Cross-encoder rerank + KU CoT |
 | **Overall** | **78.2%** | **83%+** | Everything combined |
 
-Competitive landscape (LongMemEval, 500 instances):
-
-| System | Accuracy |
-|---|---|
-| Supermemory | 85.86% |
-| **memx (target)** | **83%+** |
-| Hindsight | ~80% |
-| Mastra | ~78% |
-| gated-mem | 78.2% |
-| Mem0 | ~76% |
-| Zep | ~72% |
-
-## Installation
-
 ```bash
-git clone https://github.com/VihAMBR/memx
-cd memx
-pip install -e .
-cp .env.example .env
-# Edit .env and set OPENAI_API_KEY
-```
-
-## Quick start
-
-```python
-from memx import MemorySystem
-
-mem = MemorySystem()
-
-# Ingest sessions (one per conversation)
-sessions = [
-    {
-        "session_id": 1,
-        "date": "2024-03-01",
-        "messages": [
-            {"role": "user", "content": "I love hiking, especially in the mountains."},
-            {"role": "assistant", "content": "That sounds great! Any favourite trails?"},
-            {"role": "user", "content": "I did the Haute Route last summer, it was incredible."},
-        ],
-    },
-    {
-        "session_id": 2,
-        "date": "2024-06-15",
-        "messages": [
-            {"role": "user", "content": "I just got back from the Tour du Mont Blanc."},
-        ],
-    },
-]
-
-for s in sessions:
-    mem.ingest_session(s["messages"], session_id=s["session_id"], session_date=s["date"])
-
-# Answer questions
-print(mem.answer("What hikes has the user done?"))
-print(mem.answer("When did the user do the Haute Route?"))
-print(mem.answer("What are the user's outdoor preferences?"))
-```
-
-## Running benchmarks
-
-```bash
-# LongMemEval (requires dataset)
-python bench/run_longmemeval.py \
-    --data path/to/longmemeval_oracle.json \
-    --output results/memx_run.json \
-    --n 500
-
-python bench/eval_longmemeval.py \
-    --predictions results/memx_run.json \
-    --output results/memx_scores.json
-
-# LoCoMo
-python bench/run_locomo.py \
-    --data dataset/locomo10.json \
-    --output results/memx_locomo.json
-```
-
-## Using a custom LLM
-
-```python
-import anthropic
-from memx import MemorySystem
-
-client = anthropic.Anthropic()
-
-def claude_fn(prompt: str) -> str:
-    msg = client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return msg.content[0].text
-
-mem = MemorySystem(llm_fn=claude_fn)
+# Run benchmarks
+python bench/run_longmemeval.py --data path/to/longmemeval.json --n 500
+python bench/eval_longmemeval.py --predictions results/memx_longmemeval.json
 ```
 
 ## Project structure
@@ -142,17 +142,18 @@ mem = MemorySystem(llm_fn=claude_fn)
 ```
 memx/
 ├── memx/
-│   ├── __init__.py
-│   ├── store.py      # MemoryStore: embed + FAISS
-│   ├── retrieve.py   # Retriever: rerank + context structuring
-│   ├── reason.py     # Query classifier + CoT prompt templates
-│   ├── profile.py    # SemanticProfile: lazy user model
-│   └── system.py     # MemorySystem: ties everything together
-├── bench/
-│   ├── run_longmemeval.py
-│   ├── eval_longmemeval.py
-│   └── run_locomo.py
-├── requirements.txt
-├── pyproject.toml
-└── .env.example
+│   ├── system.py      # MemorySystem — the public API
+│   ├── store.py       # MemoryStore — embed + FAISS + SQLite
+│   ├── retrieve.py    # Retriever — rerank + context structuring
+│   ├── reason.py      # Query classifier + CoT prompt templates
+│   ├── profile.py     # SemanticProfile — lazy user model
+│   └── db.py          # SQLite persistence layer
+├── bench/             # Benchmark runners
+├── examples/          # Usage examples
+├── tests/             # Unit tests
+└── pyproject.toml
 ```
+
+## License
+
+MIT

@@ -1,6 +1,10 @@
 """
 Memory store: embed every message and index with FAISS.
 No gating. No filtering. Store everything.
+
+Backed by SQLite (via db.py) — every add() persists immediately.
+FAISS index is rebuilt lazily from whatever is in memory.
+On init, loads all existing memories from the database.
 """
 from __future__ import annotations
 
@@ -12,32 +16,48 @@ try:
 except ImportError as e:
     raise ImportError("faiss-cpu is required: pip install faiss-cpu") from e
 
+from .db import MemoryDB
+
 
 class MemoryStore:
     """
-    Flat store of conversation turns with lazy FAISS indexing.
+    Flat store of conversation turns with lazy FAISS indexing and SQLite persistence.
 
     Design choice: store *every* message without filtering.
     gated-mem experiments showed that surprise-based gating filtered out
     precisely the temporal and knowledge-update facts the benchmark queries.
-    Storing everything costs ~$0 (no LLM calls) and avoids that failure mode.
     """
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, db: MemoryDB, model_name: str = "all-MiniLM-L6-v2"):
+        self.db = db
         self.encoder = SentenceTransformer(model_name)
         self.memories: list[dict] = []
         self.embeddings: np.ndarray | None = None
         self.index = None  # faiss.IndexFlatIP
         self._dirty = False
 
+        # Load existing memories from SQLite
+        self._load_from_db()
+
+    def _load_from_db(self) -> None:
+        """Hydrate in-memory list from SQLite."""
+        self.memories = self.db.get_all_memories()
+        if self.memories:
+            self._dirty = True
+
     # ------------------------------------------------------------------
     # Mutation
     # ------------------------------------------------------------------
 
-    def add(self, text: str, timestamp: str, role: str, session_id: int) -> None:
-        """Append a single message. Index is rebuilt lazily on next search."""
+    def add(self, text: str, timestamp: str, role: str, session_id: int) -> int:
+        """
+        Store a single message. Writes to SQLite immediately.
+        Returns the database row ID.
+        """
+        row_id = self.db.insert_memory(text, timestamp, role, session_id)
         self.memories.append(
             {
+                "id": row_id,
                 "text": text,
                 "timestamp": timestamp,
                 "role": role,
@@ -45,6 +65,7 @@ class MemoryStore:
             }
         )
         self._dirty = True
+        return row_id
 
     # ------------------------------------------------------------------
     # Index management
@@ -69,8 +90,8 @@ class MemoryStore:
 
     def search(self, query: str, top_k: int = 50) -> list[tuple[dict, float]]:
         """
-        Return the top-k memories by cosine similarity (normalized → inner product).
-        Rebuilds the index automatically if new messages were added since the last build.
+        Return the top-k memories by cosine similarity (normalized dot product).
+        Rebuilds the index automatically if new messages were added since last build.
         """
         if not self.memories:
             return []
@@ -86,38 +107,6 @@ class MemoryStore:
 
         results = []
         for j, i in enumerate(indices[0]):
-            if i < len(self.memories):
+            if 0 <= i < len(self.memories):
                 results.append((self.memories[i], float(scores[0][j])))
         return results
-
-    # ------------------------------------------------------------------
-    # Persistence (optional)
-    # ------------------------------------------------------------------
-
-    def save(self, path: str) -> None:
-        """Persist memories (and embeddings) to disk."""
-        import pickle, pathlib
-
-        p = pathlib.Path(path)
-        p.mkdir(parents=True, exist_ok=True)
-        with open(p / "memories.pkl", "wb") as f:
-            pickle.dump(self.memories, f)
-        if self.embeddings is not None:
-            np.save(str(p / "embeddings.npy"), self.embeddings)
-
-    def load(self, path: str) -> None:
-        """Restore memories and rebuild the FAISS index."""
-        import pickle, pathlib
-
-        p = pathlib.Path(path)
-        with open(p / "memories.pkl", "rb") as f:
-            self.memories = pickle.load(f)
-        emb_path = p / "embeddings.npy"
-        if emb_path.exists():
-            self.embeddings = np.load(str(emb_path))
-            dim = self.embeddings.shape[1]
-            self.index = faiss.IndexFlatIP(dim)
-            self.index.add(self.embeddings)
-            self._dirty = False
-        else:
-            self._dirty = True
