@@ -28,9 +28,12 @@ class MemoryStore:
     precisely the temporal and knowledge-update facts the benchmark queries.
     """
 
-    def __init__(self, db: MemoryDB, model_name: str = "all-MiniLM-L6-v2"):
+    def __init__(self, db: MemoryDB, model_name: str | SentenceTransformer = "all-MiniLM-L6-v2"):
         self.db = db
-        self.encoder = SentenceTransformer(model_name)
+        self.encoder = (
+            model_name if isinstance(model_name, SentenceTransformer)
+            else SentenceTransformer(model_name)
+        )
         self.memories: list[dict] = []
         self.embeddings: np.ndarray | None = None
         self.index = None  # faiss.IndexFlatIP

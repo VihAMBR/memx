@@ -21,6 +21,28 @@ logger = logging.getLogger(__name__)
 
 LLMFunction = Callable[[str], str]
 
+PROFILE_SCHEMA = {
+    "location": "",
+    "job_title": "",
+    "company": "",
+    "education": "",
+    "relationship_status": "",
+    "family": [],
+    "friends": [],
+    "pets": [],
+    "hobbies": [],
+    "preferences": {
+        "food": "",
+        "music": "",
+        "travel": "",
+        "other": {},
+    },
+    "goals": [],
+    "health": "",
+    "notable_events": [],
+    "changes_log": [],
+}
+
 
 class SemanticProfile:
     """
@@ -64,6 +86,7 @@ class SemanticProfile:
             f"{m['role']}: {m['content']}" for m in session_messages
         )
 
+        schema_json = json.dumps(PROFILE_SCHEMA, indent=2)
         prompt = f"""You are maintaining a structured profile of a user based on their conversations.
 
 Current profile:
@@ -72,15 +95,19 @@ Current profile:
 New conversation session ({session_date}):
 {conversation}
 
-Update the profile based on the new conversation. Rules:
+Update the profile using EXACTLY this JSON schema (keep these keys, leave empty string/list if unknown):
+{schema_json}
+
+Rules:
+- Use ONLY the keys shown above. Do not invent new top-level keys.
 - Extract preferences, beliefs, habits, and opinions — both explicit and implicit.
-- Track factual information: job, location, relationships, interests, hobbies.
-- If new information contradicts the existing profile, UPDATE it and note what changed.
+- Track factual information: job_title, company, location, relationships, hobbies.
+- If new information contradicts the existing profile, UPDATE the field and append a brief note to "changes_log" (e.g. "2024-03: moved from NYC to SF").
 - Remove stale information that has been superseded by newer facts.
 - Keep the profile under 500 tokens total.
 - Output valid JSON only, no explanation, no markdown fences.
 
-Output the complete updated profile as a JSON object:"""
+Output the complete updated profile:"""
 
         response = llm_fn(prompt)
 

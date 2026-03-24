@@ -34,8 +34,18 @@ logger = logging.getLogger(__name__)
 
 LLMFunction = Callable[[str], str]
 
-# Default session gap: 30 minutes of inactivity starts a new session.
 _DEFAULT_SESSION_GAP_MINUTES = 30
+
+_WIDE_RETRIEVAL_TYPES = {"temporal", "knowledge_update", "counting"}
+
+
+def _human_date(iso_str: str) -> str:
+    """Convert ISO timestamp to 'Month Day, Year' for LLM consumption."""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+    except (ValueError, TypeError):
+        return iso_str or ""
+    return f"{dt.strftime('%B')} {dt.day}, {dt.year}"
 
 
 class MemorySystem:
@@ -128,8 +138,7 @@ class MemorySystem:
                 self._current_session_id, started_at=timestamp, msg_count=0,
             )
 
-        # Store the message
-        text = f"{timestamp} | {role}: {content}"
+        text = f"{_human_date(timestamp)} (Session {self._current_session_id}) | {role}: {content}"
         self.store.add(
             text=text,
             timestamp=timestamp,
@@ -163,8 +172,8 @@ class MemorySystem:
     def get_context(
         self,
         query: str,
-        top_k: int = 20,
-        candidates: int = 50,
+        top_k: int | None = None,
+        candidates: int | None = None,
     ) -> str:
         """
         Retrieve structured memory context for a query. **No LLM call.**
@@ -182,6 +191,13 @@ class MemorySystem:
         """
         if not self.store.memories:
             return ""
+
+        qt = classify_query(query)
+        wide = qt in _WIDE_RETRIEVAL_TYPES
+        if top_k is None:
+            top_k = 30 if wide else 20
+        if candidates is None:
+            candidates = 100 if wide else 50
 
         _, structured = self.retriever.retrieve_and_structure(
             query, top_k=top_k, candidates=candidates,
@@ -201,8 +217,8 @@ class MemorySystem:
     def answer(
         self,
         question: str,
-        top_k: int = 20,
-        candidates: int = 50,
+        top_k: int | None = None,
+        candidates: int | None = None,
     ) -> str:
         """
         Answer a question using retrieved memories and CoT prompting.
@@ -222,11 +238,16 @@ class MemorySystem:
         if not self.store.memories:
             return "No memories stored yet."
 
+        query_type = classify_query(question)
+        wide = query_type in _WIDE_RETRIEVAL_TYPES
+        if top_k is None:
+            top_k = 30 if wide else 20
+        if candidates is None:
+            candidates = 100 if wide else 50
+
         _, structured = self.retriever.retrieve_and_structure(
             question, top_k=top_k, candidates=candidates,
         )
-
-        query_type = classify_query(question)
         prompt = build_prompt(
             question=question,
             memories_context=structured,
@@ -255,7 +276,10 @@ class MemorySystem:
             session_date: ISO date string.
         """
         for msg in messages:
-            text = f"{session_date} | {msg['role']}: {msg['content']}"
+            text = (
+                f"{_human_date(session_date)} (Session {session_id})"
+                f" | {msg['role']}: {msg['content']}"
+            )
             self.store.add(text, session_date, msg["role"], session_id)
 
         self._db.upsert_session(

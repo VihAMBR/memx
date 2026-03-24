@@ -11,10 +11,20 @@ gated-mem experiments showed this pushed:
 """
 from __future__ import annotations
 
+from datetime import datetime as _dt
+
 import numpy as np
 from sentence_transformers import CrossEncoder
 
 from .store import MemoryStore
+
+
+def _human_date(iso_str: str) -> str:
+    try:
+        dt = _dt.fromisoformat(iso_str)
+    except (ValueError, TypeError):
+        return iso_str or "unknown date"
+    return f"{dt.strftime('%B')} {dt.day}, {dt.year}"
 
 
 class Retriever:
@@ -23,10 +33,13 @@ class Retriever:
     def __init__(
         self,
         store: MemoryStore,
-        reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        reranker_model: str | CrossEncoder = "cross-encoder/ms-marco-MiniLM-L-6-v2",
     ):
         self.store = store
-        self.reranker = CrossEncoder(reranker_model)
+        self.reranker = (
+            reranker_model if isinstance(reranker_model, CrossEncoder)
+            else CrossEncoder(reranker_model)
+        )
 
     # ------------------------------------------------------------------
     # Core retrieval
@@ -104,22 +117,42 @@ class Retriever:
         output_parts: list[str] = []
         for group_indices in groups:
             group_mems = [memories[i] for i in group_indices]
-            # Sort chronologically within cluster
             group_mems.sort(key=lambda m: m.get("timestamp", ""))
 
             if len(group_mems) == 1:
                 output_parts.append(f"- {group_mems[0]['text']}")
             else:
                 sessions = {m.get("session_id") for m in group_mems}
+                is_multi = len(sessions) > 1
                 header = (
                     f"[Topic cluster · {len(group_mems)} memories"
                     f" across {len(sessions)} session(s)]"
                 )
-                if len(sessions) > 1:
-                    header += "  ⚠️  May contain updates — use the most recent entry"
+                if is_multi:
+                    header += (
+                        "  ⚠️  Contains updates — "
+                        "[CURRENT] supersedes [SUPERSEDED] entries"
+                    )
+
                 lines = [header]
-                for m in group_mems:
-                    lines.append(f"  - {m['text']}")
+
+                if is_multi:
+                    max_sid = max(m.get("session_id", 0) for m in group_mems)
+                    last_sid = None
+                    for m in group_mems:
+                        sid = m.get("session_id")
+                        if sid != last_sid:
+                            ts = m.get("timestamp", "")
+                            lines.append(
+                                f"  --- Session {sid} ({_human_date(ts)}) ---"
+                            )
+                            last_sid = sid
+                        tag = "[CURRENT]" if sid == max_sid else "[SUPERSEDED]"
+                        lines.append(f"  - {tag} {m['text']}")
+                else:
+                    for m in group_mems:
+                        lines.append(f"  - {m['text']}")
+
                 output_parts.append("\n".join(lines))
 
         return "\n\n".join(output_parts)

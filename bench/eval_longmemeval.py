@@ -23,6 +23,12 @@ from tqdm import tqdm
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
 try:
+    from dotenv import load_dotenv
+    load_dotenv(pathlib.Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
+
+try:
     from openai import OpenAI
 except ImportError:
     print("openai package required: pip install openai")

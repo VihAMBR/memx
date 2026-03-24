@@ -36,6 +36,19 @@ from tqdm import tqdm
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(pathlib.Path(__file__).parent.parent / ".env")
+except ImportError:
+    pass
+
+try:
+    from openai import OpenAI
+except ImportError:
+    print("openai package required: pip install openai")
+    sys.exit(1)
+
+from sentence_transformers import SentenceTransformer, CrossEncoder
 from memx import MemorySystem
 
 
@@ -47,30 +60,63 @@ def load_dataset(path: str, n: int | None = None) -> list[dict]:
     return data
 
 
-def run_instance(instance: dict, model: str) -> dict:
-    """Run a single LongMemEval instance through memx."""
-    mem = MemorySystem(llm_model=model, update_profile=True)
+def _make_llm(client: OpenAI, model: str):
+    def llm_fn(prompt: str) -> str:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+        )
+        return resp.choices[0].message.content or ""
+    return llm_fn
 
-    # Ingest all sessions
-    for session in instance.get("sessions", []):
-        sid = session.get("session_id", 0)
-        date = session.get("date", "2024-01-01")
-        messages = session.get("messages", [])
+
+def _parse_longmemeval_date(raw: str) -> str:
+    """Convert '2023/04/10 (Mon) 17:50' → '2023-04-10'."""
+    date_part = raw.split("(")[0].strip()
+    return date_part.replace("/", "-")
+
+
+def run_instance(
+    instance: dict,
+    llm_fn,
+    instance_id: int,
+    encoder=None,
+    reranker=None,
+) -> dict:
+    """Run a single LongMemEval instance through memx."""
+    mem = MemorySystem(
+        user_id=f"longmemeval_{instance_id}",
+        db_path="~/.memx/bench",
+        llm=llm_fn,
+        encoder_model=encoder or "all-MiniLM-L6-v2",
+        reranker_model=reranker or "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    )
+
+    sessions = instance.get("haystack_sessions", [])
+    dates = instance.get("haystack_dates", [])
+    session_ids = instance.get("haystack_session_ids", [])
+
+    for idx, msgs_raw in enumerate(sessions):
+        sid = idx + 1
+        date = _parse_longmemeval_date(dates[idx]) if idx < len(dates) else "2024-01-01"
+        messages = [{"role": m["role"], "content": m["content"]} for m in msgs_raw]
         mem.ingest_session(messages, session_id=sid, session_date=date)
 
-    # Answer the question
     question = instance["question"]
     try:
         predicted = mem.answer(question)
     except Exception as e:
         predicted = f"ERROR: {e}"
 
+    mem.close()
+
     return {
         "question": question,
         "question_type": instance.get("question_type", "unknown"),
         "gold_answer": instance.get("answer", ""),
         "predicted": predicted,
-        "num_sessions": len(instance.get("sessions", [])),
+        "num_sessions": len(sessions),
     }
 
 
@@ -86,7 +132,14 @@ def main():
     dataset = load_dataset(args.data, args.n)
     print(f"Loaded {len(dataset)} instances from {args.data}")
 
-    # Resume support
+    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    llm_fn = _make_llm(client, args.model)
+
+    print("Loading embedding + reranker models (one-time)...")
+    encoder = SentenceTransformer("all-MiniLM-L6-v2")
+    reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    print("Models loaded.")
+
     results: list[dict] = []
     done_ids: set[int] = set()
     out_path = pathlib.Path(args.output)
@@ -103,7 +156,10 @@ def main():
         if i in done_ids:
             continue
 
-        result = run_instance(instance, model=args.model)
+        result = run_instance(
+            instance, llm_fn=llm_fn, instance_id=i,
+            encoder=encoder, reranker=reranker,
+        )
         result["instance_id"] = i
         results.append(result)
 
