@@ -9,7 +9,6 @@ On init, loads all existing memories from the database.
 from __future__ import annotations
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 try:
     import faiss
@@ -17,6 +16,7 @@ except ImportError as e:
     raise ImportError("faiss-cpu is required: pip install faiss-cpu") from e
 
 from .db import MemoryDB
+from .embed import Embedder, auto_embedder
 
 
 class MemoryStore:
@@ -28,7 +28,7 @@ class MemoryStore:
     precisely the temporal and knowledge-update facts the benchmark queries.
     """
 
-    def __init__(self, db: MemoryDB, model_name: str | SentenceTransformer = "all-MiniLM-L6-v2"):
+    def __init__(self, db: MemoryDB, embedder: str | Embedder | None = "all-MiniLM-L6-v2"):
         self.db = db
         self.encoder = (
             model_name if isinstance(model_name, SentenceTransformer)

@@ -104,8 +104,11 @@ def run_instance(
         mem.ingest_session(messages, session_id=sid, session_date=date)
 
     question = instance["question"]
+    raw_qdate = instance.get("question_date", "")
+    q_date = _parse_longmemeval_date(raw_qdate) if raw_qdate else None
+
     try:
-        predicted = mem.answer(question)
+        predicted = mem.answer(question, question_date=q_date)
     except Exception as e:
         predicted = f"ERROR: {e}"
 

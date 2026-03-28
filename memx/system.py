@@ -36,8 +36,6 @@ LLMFunction = Callable[[str], str]
 
 _DEFAULT_SESSION_GAP_MINUTES = 30
 
-_WIDE_RETRIEVAL_TYPES = {"temporal", "knowledge_update", "counting"}
-
 
 def _human_date(iso_str: str) -> str:
     """Convert ISO timestamp to 'Month Day, Year' for LLM consumption."""
@@ -172,8 +170,8 @@ class MemorySystem:
     def get_context(
         self,
         query: str,
-        top_k: int | None = None,
-        candidates: int | None = None,
+        top_k: int = 30,
+        candidates: int = 100,
     ) -> str:
         """
         Retrieve structured memory context for a query. **No LLM call.**
@@ -186,18 +184,11 @@ class MemorySystem:
 
         Args:
             query:      The question or topic to retrieve memories for.
-            top_k:      Number of memories to include after reranking.
-            candidates: Number of FAISS candidates to rerank from.
+            top_k:      Number of memories to include after reranking (default 30).
+            candidates: Number of FAISS candidates to rerank from (default 100).
         """
         if not self.store.memories:
             return ""
-
-        qt = classify_query(query)
-        wide = qt in _WIDE_RETRIEVAL_TYPES
-        if top_k is None:
-            top_k = 30 if wide else 20
-        if candidates is None:
-            candidates = 100 if wide else 50
 
         _, structured = self.retriever.retrieve_and_structure(
             query, top_k=top_k, candidates=candidates,
@@ -217,8 +208,9 @@ class MemorySystem:
     def answer(
         self,
         question: str,
-        top_k: int | None = None,
-        candidates: int | None = None,
+        top_k: int = 30,
+        candidates: int = 100,
+        question_date: str | None = None,
     ) -> str:
         """
         Answer a question using retrieved memories and CoT prompting.
@@ -226,7 +218,11 @@ class MemorySystem:
         Requires an LLM function (passed at init or via ``self.llm``).
         Cost: 1 LLM call + local cross-encoder reranking (~10 ms).
 
-        For most use cases, prefer ``get_context()`` and handle the LLM call yourself.
+        Args:
+            question:      The question to answer.
+            top_k:         Memories after reranking (default 30).
+            candidates:    FAISS candidates before reranking (default 100).
+            question_date: ISO date string for "today" context. Defaults to now.
         """
         if self.llm is None:
             raise RuntimeError(
@@ -238,12 +234,12 @@ class MemorySystem:
         if not self.store.memories:
             return "No memories stored yet."
 
+        if question_date is None:
+            question_date = _human_date(datetime.now().isoformat())
+        else:
+            question_date = _human_date(question_date)
+
         query_type = classify_query(question)
-        wide = query_type in _WIDE_RETRIEVAL_TYPES
-        if top_k is None:
-            top_k = 30 if wide else 20
-        if candidates is None:
-            candidates = 100 if wide else 50
 
         _, structured = self.retriever.retrieve_and_structure(
             question, top_k=top_k, candidates=candidates,
@@ -253,6 +249,7 @@ class MemorySystem:
             memories_context=structured,
             profile_section=self.profile_engine.format_for_context(),
             query_type=query_type,
+            question_date=question_date,
         )
 
         return self.llm(prompt)

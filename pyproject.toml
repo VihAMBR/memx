@@ -12,13 +12,12 @@ license = { text = "MIT" }
 keywords = ["memory", "llm", "rag", "faiss", "ai", "chatbot", "agent"]
 
 dependencies = [
-    "sentence-transformers>=2.7.0",
-    "faiss-cpu>=1.8.0",
     "numpy>=1.26.0",
     "tqdm>=4.66.0",
 ]
 
 [project.optional-dependencies]
+local = ["sentence-transformers>=2.7.0", "faiss-cpu>=1.8.0"]
 openai = ["openai>=1.30.0"]
 anthropic = ["anthropic>=0.30.0"]
 dev = ["pytest>=8.0", "black", "ruff"]

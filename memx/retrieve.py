@@ -14,7 +14,6 @@ from __future__ import annotations
 from datetime import datetime as _dt
 
 import numpy as np
-from sentence_transformers import CrossEncoder
 
 from .store import MemoryStore
 
@@ -30,11 +29,7 @@ def _human_date(iso_str: str) -> str:
 class Retriever:
     """Two-stage retriever: FAISS candidates + cross-encoder reranking."""
 
-    def __init__(
-        self,
-        store: MemoryStore,
-        reranker_model: str | CrossEncoder = "cross-encoder/ms-marco-MiniLM-L-6-v2",
-    ):
+    def __init__(self, reranker: str | Reranker | None = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
         self.store = store
         self.reranker = (
             reranker_model if isinstance(reranker_model, CrossEncoder)
