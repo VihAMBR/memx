@@ -13,6 +13,7 @@ Quick start:
 """
 
 from .system import MemorySystem
+from .async_system import AsyncMemorySystem
 from .store import MemoryStore
 from .retrieve import Retriever
 from .reason import classify_query, build_prompt, PROMPTS

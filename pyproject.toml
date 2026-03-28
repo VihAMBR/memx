@@ -17,6 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+server = ["fastapi", "uvicorn", "pydantic"]
 local = ["sentence-transformers>=2.7.0", "faiss-cpu>=1.8.0"]
 openai = ["openai>=1.30.0"]
 anthropic = ["anthropic>=0.30.0"]
