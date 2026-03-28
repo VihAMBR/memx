@@ -1,12 +1,44 @@
 # memx
 
+**The SQLite of AI Memory.**
+
 A minimal, high-accuracy memory system for AI agents.
-Four components. No gating. No graph databases. No multi-agent pipelines.
+Four components. No gating. No graph databases. No multi-agent pipelines. 
+
+🚀 **NEW in v0.2.0 (Featherweight Update):**
+- **Zero Infra & Featherweight:** PyTorch and FAISS are now *optional*. Core package is < 50MB.
+- **Pluggable Embeddings:** Auto-detects and uses OpenAI, Google Vertex, or local `sentence-transformers`.
+- **FastAPI Drop-in Server:** Instantly expose your memory system via REST API (`python -m memx.server`).
+- **Async Support:** `AsyncMemorySystem` included for non-blocking workflows.
 
 ## Install
 
 ```bash
-pip install -e .
+# Minimal install (uses OpenAI/Vertex APIs for embeddings)
+pip install memx
+
+# Local install (includes sentence-transformers and faiss-cpu)
+pip install memx[local]
+
+# Server install (includes FastAPI and Uvicorn)
+pip install memx[server]
+```
+
+## FastAPI Drop-in Server
+Run memx as a standalone REST microservice instantly:
+```bash
+python -m memx.server
+```
+Endpoints available: `/add`, `/end_session`, `/context`, `/answer`
+
+## Async Usage
+```python
+from memx import AsyncMemorySystem
+
+async def main():
+    mem = AsyncMemorySystem(user_id="user_123")
+    await mem.add("user", "I love hiking")
+    context = await mem.get_context("hobbies")
 ```
 
 ## Quick start
